@@ -67,3 +67,7 @@ schtasks /create /tn "HN Daily Signals" /sc daily /st 07:00 /tr "C:\absolute\pat
 Set the task's "Start in" directory to the project folder so `.env` and `data/` resolve correctly.
 
 The first run preloads one week of archive. Scheduled runs after that refresh the current day.
+
+## Deployment
+
+Live deployment notes and the git history for the class report are in [docs/deployment-log.md](docs/deployment-log.md).

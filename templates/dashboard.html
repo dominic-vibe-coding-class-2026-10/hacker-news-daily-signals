@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hacker News Daily Signals</title>
+  <title>Hacker News Daily Signals · Dominic Yu</title>
   <style>
     :root {
       --paper: #f4efe6;
@@ -51,6 +51,9 @@
       text-wrap: balance;
     }
     .lede { margin: 8px 0 0; color: var(--muted); font-size: 17px; }
+    .byline { margin: 8px 0 0; color: var(--ink); font-size: 16px; font-weight: 600; font-family: "Avenir Next", "Segoe UI", sans-serif; }
+    .byline a { color: var(--accent); text-decoration: none; }
+    .byline a:hover { text-decoration: underline; }
     .controls {
       display: flex;
       flex-wrap: wrap;
@@ -162,6 +165,7 @@
       <p class="mark" id="mark">Daily Signals</p>
       <h1 id="title">Hacker News Daily Signals</h1>
       <p class="lede" id="lede">Stories from the last 24 hours</p>
+      <p class="byline">Dominic Yu · <a href="mailto:dominic@data-science-hk.org">dominic@data-science-hk.org</a></p>
     </div>
     <div class="controls">
       <label id="date-label">Date
@@ -197,7 +201,7 @@
     const copy = {
       en: {
         mark: "Daily Signals",
-        title: "Hacker News Daily Signals",
+        title: "Hacker News Daily Signals · Dominic Yu",
         lede: "Stories from the last 24 hours",
         date: "Date",
         language: "Language",
@@ -217,7 +221,7 @@
       },
       zh: {
         mark: "每日訊號",
-        title: "Hacker News 每日訊號",
+        title: "Hacker News 每日訊號 · Dominic Yu",
         lede: "過去 24 小時的故事",
         date: "日期",
         language: "語言",
