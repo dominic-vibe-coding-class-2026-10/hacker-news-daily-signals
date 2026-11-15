@@ -4,7 +4,7 @@ from app.other_sources import (
     keep_hket_page,
     parse_hket_parts,
     parse_hket_time,
-    parse_slashdot_time,
+    publication_day,
 )
 
 from app import db
@@ -74,9 +74,44 @@ def test_hket_page_keeps_dated_cards_older_than_a_day():
     assert kept[1]["age_text"].endswith("ago")
 
 
-def test_slashdot_time_is_us_eastern():
-    parsed = parse_slashdot_time("on Sunday November 15, 2026 @03:34AM")
-    assert parsed == datetime(2026, 11, 15, 8, 34, tzinfo=timezone.utc)
+def test_publication_day_follows_the_date_on_the_article():
+    early_hong_kong = parse_hket_time("2026-11-14", "01:30")
+    assert early_hong_kong == datetime(2026, 11, 13, 17, 30, tzinfo=timezone.utc)
+    assert publication_day("hket", early_hong_kong) == "2026-11-14"
+
+
+def test_save_on_publication_dates_leaves_other_sources(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "hn.db")
+    db.init_db()
+    hn = {
+        "title": "Front page",
+        "external_url": "https://example.com/hn",
+        "hn_url": "https://news.ycombinator.com/item?id=1",
+        "points": 10,
+        "comments": 2,
+        "summary_en": "English.",
+        "summary_zh": "中文。",
+        "raw_content": "body",
+    }
+    db.replace_day("2026-11-15", [hn], source="hn")
+    misplaced = {
+        **hn,
+        "title": "Printed on the 14th",
+        "external_url": "https://inews.hket.com/article/1",
+        "hn_url": "https://inews.hket.com/article/1",
+        "points": 0,
+        "comments": 0,
+    }
+    db.replace_day("2026-11-15", [misplaced], source="hket")
+    moved = {**misplaced, "date": "2026-11-14"}
+    dates = db.save_on_publication_dates("hket", [moved])
+    assert dates == ["2026-11-14"]
+    assert [story["title"] for story in db.stories_for("2026-11-14", ["hket"])] == [
+        "Printed on the 14th"
+    ]
+    assert db.stories_for("2026-11-15", ["hket"]) == []
+    assert db.stories_for("2026-11-15", ["hn"])[0]["title"] == "Front page"
 
 
 def test_age_text():
@@ -117,8 +152,8 @@ def test_replace_day_roundtrip(tmp_path, monkeypatch):
     db.replace_day("2026-11-15", [story], source="hn")
     db.replace_day(
         "2026-11-15",
-        [{**story, "title": "Lobster story", "external_url": "https://example.com/a"}],
-        source="lobsters",
+        [{**story, "title": "HKET story", "external_url": "https://example.com/a"}],
+        source="hket",
     )
     assert len(db.stories_for("2026-11-15")) == 2
     only_hn = db.stories_for("2026-11-15", ["hn"])

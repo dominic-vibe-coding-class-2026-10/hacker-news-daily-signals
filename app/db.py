@@ -169,6 +169,39 @@ def release_run_lock() -> None:
         meta_set("scrape_pid", "")
 
 
+def _story_row(day: str, source: str, story: dict) -> tuple:
+    return (
+        day,
+        source,
+        story["title"],
+        story.get("external_url") or "",
+        story.get("hn_url") or "",
+        int(story.get("points") or 0),
+        int(story.get("comments") or 0),
+        story.get("summary_en") or "",
+        story.get("summary_zh") or "",
+        story.get("raw_content") or "",
+    )
+
+
+def _recount_day(conn: sqlite3.Connection, day: str, scraped_at: str) -> None:
+    total = conn.execute(
+        "SELECT COUNT(*) AS n FROM stories WHERE date = ?",
+        (day,),
+    ).fetchone()["n"]
+    conn.execute(
+        """
+        INSERT INTO days(date, note, story_count, scraped_at)
+        VALUES(?, ?, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET
+            note = excluded.note,
+            story_count = excluded.story_count,
+            scraped_at = excluded.scraped_at
+        """,
+        (day, "" if total else "empty", total, scraped_at),
+    )
+
+
 def replace_day(day: str, stories: list[dict], source: str = "hn") -> None:
     """Replace one source's rows for a day and keep the other sources."""
     scraped_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -187,40 +220,104 @@ def replace_day(day: str, stories: list[dict], source: str = "hn") -> None:
                     summary_en, summary_zh, raw_content
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [
-                    (
-                        day,
-                        source,
-                        story["title"],
-                        story.get("external_url") or "",
-                        story.get("hn_url") or "",
-                        int(story.get("points") or 0),
-                        int(story.get("comments") or 0),
-                        story.get("summary_en") or "",
-                        story.get("summary_zh") or "",
-                        story.get("raw_content") or "",
-                    )
-                    for story in stories
-                ],
+                [_story_row(day, source, story) for story in stories],
             )
-            total = conn.execute(
-                "SELECT COUNT(*) AS n FROM stories WHERE date = ?",
-                (day,),
-            ).fetchone()["n"]
-            conn.execute(
-                """
-                INSERT INTO days(date, note, story_count, scraped_at)
-                VALUES(?, ?, ?, ?)
-                ON CONFLICT(date) DO UPDATE SET
-                    note = excluded.note,
-                    story_count = excluded.story_count,
-                    scraped_at = excluded.scraped_at
-                """,
-                (day, "" if total else "empty", total, scraped_at),
-            )
+            _recount_day(conn, day, scraped_at)
             conn.commit()
         finally:
             conn.close()
+
+
+def save_on_publication_dates(source: str, stories: list[dict]) -> list[str]:
+    """Store each story on story['date'] and drop this source's older copy of the same URL."""
+    scraped_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    by_day: dict[str, list[dict]] = {}
+    urls: list[str] = []
+    for story in stories:
+        day = story["date"]
+        by_day.setdefault(day, []).append(story)
+        for key in (story.get("external_url") or "", story.get("hn_url") or ""):
+            if key:
+                urls.append(key)
+    with _lock:
+        conn = connect()
+        try:
+            conn.execute("BEGIN")
+            old_dates: set[str] = set()
+            if urls:
+                placeholders = ", ".join("?" for _ in urls)
+                rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT date FROM stories
+                    WHERE source = ?
+                      AND (external_url IN ({placeholders}) OR hn_url IN ({placeholders}))
+                    """,
+                    [source, *urls, *urls],
+                ).fetchall()
+                old_dates = {row["date"] for row in rows}
+                conn.execute(
+                    f"""
+                    DELETE FROM stories
+                    WHERE source = ?
+                      AND (external_url IN ({placeholders}) OR hn_url IN ({placeholders}))
+                    """,
+                    [source, *urls, *urls],
+                )
+            for day in by_day:
+                conn.execute(
+                    "DELETE FROM stories WHERE date = ? AND source = ?",
+                    (day, source),
+                )
+            conn.executemany(
+                """
+                INSERT INTO stories (
+                    date, source, title, external_url, hn_url, points, comments,
+                    summary_en, summary_zh, raw_content
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    _story_row(day, source, story)
+                    for day, group in by_day.items()
+                    for story in group
+                ],
+            )
+            for day in sorted(old_dates | set(by_day)):
+                _recount_day(conn, day, scraped_at)
+            conn.commit()
+        finally:
+            conn.close()
+    return sorted(by_day)
+
+
+def move_story_dates(updates: list[tuple[int, str]]) -> list[str]:
+    """Point existing rows at a new day. Each item is (story id, YYYY-MM-DD)."""
+    if not updates:
+        return []
+    scraped_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _lock:
+        conn = connect()
+        try:
+            conn.execute("BEGIN")
+            ids = [story_id for story_id, _day in updates]
+            placeholders = ", ".join("?" for _ in ids)
+            old_dates = {
+                row["date"]
+                for row in conn.execute(
+                    f"SELECT DISTINCT date FROM stories WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+            }
+            conn.executemany(
+                "UPDATE stories SET date = ? WHERE id = ?",
+                [(day, story_id) for story_id, day in updates],
+            )
+            touched = old_dates | {day for _story_id, day in updates}
+            for day in sorted(touched):
+                _recount_day(conn, day, scraped_at)
+            conn.commit()
+        finally:
+            conn.close()
+    return sorted(touched)
 
 
 def list_days() -> list[dict]:

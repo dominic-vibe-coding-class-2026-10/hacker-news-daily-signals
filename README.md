@@ -2,7 +2,7 @@
 
 A local daily tracker for [Hacker News](https://news.ycombinator.com/). Playwright opens the front page, clicks **More** at most three times, and opens each story title. Ollama Cloud keeps stories from the last 24 hours and writes a short summary in English and Traditional Chinese. Results are stored in SQLite and shown on a small dashboard.
 
-The first run preloads the last 7 calendar days from Hacker News archive front pages (`/front?day=YYYY-MM-DD`). Later runs refresh today only.
+The first run preloads the last 7 calendar days from Hacker News archive front pages (`/front?day=YYYY-MM-DD`). Later runs refresh today only. HKET tech is collected on that same run and stored on the Hong Kong date printed on each card, so a story dated the 14th shows when that date is selected.
 
 Firecrawl and Tavily keys are optional and are not used. The scrape always goes through Playwright.
 

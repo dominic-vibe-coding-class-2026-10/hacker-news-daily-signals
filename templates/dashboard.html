@@ -181,8 +181,6 @@
     <div class="source-checks" role="group" aria-labelledby="sources-label">
       <label><input type="checkbox" name="source" value="hket" checked> <span id="src-hket">HKET</span></label>
       <label><input type="checkbox" name="source" value="hn" checked> <span id="src-hn">Hacker News</span></label>
-      <label><input type="checkbox" name="source" value="lobsters" checked> <span id="src-lobsters">Lobsters</span></label>
-      <label><input type="checkbox" name="source" value="slashdot" checked> <span id="src-slashdot">Slashdot</span></label>
     </div>
     <button type="submit" id="apply">Apply</button>
   </form>
@@ -207,14 +205,14 @@
         comments: "Comments",
         sources: "Sources",
         apply: "Apply",
-        sourceNames: { hket: "HKET", hn: "Hacker News", lobsters: "Lobsters", slashdot: "Slashdot" },
+        sourceNames: { hket: "HKET", hn: "Hacker News" },
         pick: "Select at least one source, then press Apply.",
         emptyFiltered: "No stories from the selected sources for this day.",
         empty: "No stories from the last 24 hours were on the front page for this day.",
         loading: "Loading the last 7 days of archive…",
         waiting: "Waiting for the first scrape to start…",
         report: "View Markdown",
-        foot: "HKET tech, Hacker News, Lobsters, and Slashdot. Choose one source or all four, then press Apply.",
+        foot: "HKET tech and Hacker News. Choose one source or both, then press Apply.",
         uptodate: "Up to date",
       },
       zh: {
@@ -227,14 +225,14 @@
         comments: "留言",
         sources: "來源",
         apply: "套用",
-        sourceNames: { hket: "HKET", hn: "Hacker News", lobsters: "Lobsters", slashdot: "Slashdot" },
+        sourceNames: { hket: "HKET", hn: "Hacker News" },
         pick: "請至少選一個來源，然後按套用。",
         emptyFiltered: "選定的來源在這一天沒有故事。",
         empty: "這一天的首頁上，沒有 24 小時內的故事。",
         loading: "正在載入最近 7 天的資料…",
         waiting: "正在等待第一次抓取開始…",
         report: "查看 Markdown",
-        foot: "來源為香港經濟日報科技版、Hacker News、Lobsters 與 Slashdot。可選一個或全選，然後按套用。",
+        foot: "來源為香港經濟日報科技版與 Hacker News。可選一個或全選，然後按套用。",
         uptodate: "已是最新",
       },
     };
@@ -247,7 +245,7 @@
       message: "",
       preloadComplete: false,
       signature: "",
-      sources: ["hket", "hn", "lobsters", "slashdot"],
+      sources: ["hket", "hn"],
     };
 
     const $ = (id) => document.getElementById(id);
@@ -275,15 +273,15 @@
       renderStatus();
     }
 
-    const ALL_SOURCES = ["hket", "hn", "lobsters", "slashdot"];
+    const ALL_SOURCES = ["hket", "hn"];
 
     function savedSources() {
       try {
         const saved = JSON.parse(localStorage.getItem("hn-sources") || "null");
         if (!Array.isArray(saved)) return ALL_SOURCES.slice();
+        if (saved.join(",") === "hn,lobsters,slashdot") return ALL_SOURCES.slice();
         const picked = saved.filter((id) => ALL_SOURCES.includes(id));
-        if (picked.join(",") === "hn,lobsters,slashdot") return ["hket", ...picked];
-        return picked;
+        return picked.length ? picked : ALL_SOURCES.slice();
       } catch (error) {
         return ALL_SOURCES.slice();
       }

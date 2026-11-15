@@ -1,4 +1,4 @@
-"""Playwright scrapers for HKET, Lobsters, and Slashdot."""
+"""Playwright scraper for the HKET tech section."""
 
 from __future__ import annotations
 
@@ -11,24 +11,23 @@ from playwright.async_api import Browser, Page, async_playwright
 
 from app.db import (
     acquire_run_lock,
+    connect,
     init_db,
     meta_set,
+    move_story_dates,
     release_run_lock,
     replace_day,
+    save_on_publication_dates,
 )
 from app.filter import filter_stories
 from app.report import write_report
 from app.scraper import USER_AGENT, _extract_text
 from app.timeutil import (
     age_text_as_of,
-    parse_comments,
-    parse_points,
     reference_for,
     utcnow,
-    within_window,
 )
 
-EASTERN = ZoneInfo("America/New_York")
 HONG_KONG = ZoneInfo("Asia/Hong_Kong")
 ARTICLE_CONCURRENCY = 4
 HKET_LIST = "https://inews.hket.com/sran010/%E7%A7%91%E6%8A%80"
@@ -59,44 +58,6 @@ HKET_JS = """
 }
 """
 
-LOBSTERS_JS = """
-() => [...document.querySelectorAll("div.story_liner")].map((row) => {
-  const link = row.querySelector("h2.link a");
-  const time = row.querySelector("time");
-  const comments = row.querySelector("a.comments_label");
-  const score = row.querySelector("a.upvoter");
-  return {
-    title: link ? link.textContent.trim() : "",
-    href: link ? link.href : "",
-    discussion: comments ? comments.href : "",
-    posted_unix: time ? time.getAttribute("data-at-unix") || "" : "",
-    comments: comments ? comments.textContent.trim() : "",
-    score: score ? score.textContent.trim() : "",
-  };
-})
-"""
-
-SLASHDOT_JS = """
-() => [...document.querySelectorAll("span.story-title")].map((title) => {
-  const link = title.querySelector("a");
-  const external = title.querySelector("a.story-sourcelnk");
-  const bubble = title.querySelector(".comment-bubble a");
-  const heading = title.closest("h2");
-  const details = heading ? heading.nextElementSibling : null;
-  const time = details ? details.querySelector("time") : null;
-  const body = details ? details.nextElementSibling : null;
-  return {
-    title: link ? link.textContent.trim() : "",
-    href: external ? external.href : "",
-    discussion: link ? link.href : "",
-    posted_label: time ? (time.getAttribute("datetime") || time.textContent || "") : "",
-    comments: bubble ? bubble.textContent.trim() : "",
-    content: body ? (body.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 2000) : "",
-  };
-})
-"""
-
-
 def parse_hket_time(day: str, clock: str) -> datetime | None:
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day or ""):
         return None
@@ -121,18 +82,10 @@ def parse_hket_parts(parts: list[str], now: datetime | None = None) -> datetime 
     return None
 
 
-def parse_slashdot_time(label: str) -> datetime | None:
-    match = re.search(
-        r"([A-Z][a-z]+ \d{1,2}, \d{4}) @(\d{1,2}:\d{2})(AM|PM)",
-        label or "",
-    )
-    if not match:
-        return None
-    parsed = datetime.strptime(
-        f"{match.group(1)} {match.group(2)}{match.group(3)}",
-        "%B %d, %Y %I:%M%p",
-    )
-    return parsed.replace(tzinfo=EASTERN).astimezone(timezone.utc)
+def publication_day(source: str, posted: datetime) -> str:
+    """Hong Kong calendar date printed on an HKET card, not the scrape day."""
+    zone = HONG_KONG if source == "hket" else timezone.utc
+    return posted.astimezone(zone).date().isoformat()
 
 
 def _absolute(href: str) -> str:
@@ -141,22 +94,6 @@ def _absolute(href: str) -> str:
     if href.startswith("//"):
         return "https:" + href
     return href
-
-
-def _recent(stories: list[dict], reference: datetime) -> list[dict]:
-    chosen: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    for story in stories:
-        posted = story.get("posted")
-        if not isinstance(posted, datetime) or not within_window(posted, reference):
-            continue
-        key = (" ".join(story["title"].split()).casefold(), story.get("external_url") or "")
-        if key in seen:
-            continue
-        seen.add(key)
-        story["age_text"] = age_text_as_of(posted, reference)
-        chosen.append(story)
-    return chosen
 
 
 async def _route(route) -> None:
@@ -220,50 +157,6 @@ def _from_hket(row: dict) -> dict | None:
     }
 
 
-def _from_lobsters(row: dict) -> dict | None:
-    title = " ".join((row.get("title") or "").split())
-    if not title:
-        return None
-    unix = str(row.get("posted_unix") or "").strip()
-    posted = None
-    if unix.isdigit():
-        posted = datetime.fromtimestamp(int(unix), timezone.utc)
-    external = _absolute(row.get("href") or "")
-    discussion = _absolute(row.get("discussion") or "")
-    if external.startswith("https://lobste.rs/"):
-        external = ""
-    return {
-        "title": title,
-        "external_url": external,
-        "hn_url": discussion,
-        "open_url": external or discussion,
-        "points": parse_points(row.get("score") or ""),
-        "comments": parse_comments(row.get("comments") or ""),
-        "posted": posted,
-        "raw_content": "",
-        "source": "lobsters",
-    }
-
-
-def _from_slashdot(row: dict) -> dict | None:
-    title = " ".join((row.get("title") or "").split())
-    if not title:
-        return None
-    external = _absolute(row.get("href") or "")
-    discussion = _absolute(row.get("discussion") or "")
-    return {
-        "title": title,
-        "external_url": external,
-        "hn_url": discussion,
-        "open_url": external or discussion,
-        "points": 0,
-        "comments": parse_comments(row.get("comments") or ""),
-        "posted": parse_slashdot_time(row.get("posted_label") or ""),
-        "raw_content": " ".join((row.get("content") or "").split())[:2000],
-        "source": "slashdot",
-    }
-
-
 def keep_hket_page(
     stories: list[dict], reference: datetime, limit: int = HKET_MAX_STORIES
 ) -> list[dict]:
@@ -304,7 +197,7 @@ async def _collect_hket(page: Page, reference: datetime) -> list[dict]:
     )
 
 
-async def _scrape_both() -> None:
+async def _scrape_hket() -> None:
     today = utcnow().date()
     reference = reference_for(today)
     async with async_playwright() as playwright:
@@ -318,35 +211,32 @@ async def _scrape_both() -> None:
         )
         await context.route("**/*", _route)
         page = await context.new_page()
-        collected: dict[str, list[dict]] = {}
         try:
-            collected["hket"] = await _collect_hket(page, reference)
-            lobsters_rows = await _collect(page, "https://lobste.rs/", LOBSTERS_JS)
-            slashdot_rows = await _collect(page, "https://slashdot.org/", SLASHDOT_JS)
+            stories = await _collect_hket(page, reference)
         finally:
             await context.close()
-        collected["lobsters"] = _recent(
-            [story for row in lobsters_rows if (story := _from_lobsters(row))],
-            reference,
-        )
-        collected["slashdot"] = _recent(
-            [story for row in slashdot_rows if (story := _from_slashdot(row))],
-            reference,
-        )
-        for source, stories in collected.items():
-            label = "dated tech stories" if source == "hket" else "within 24 hours"
-            print(f"  {source}: {len(stories)} {label}", flush=True)
-            if stories:
-                await _open_articles(browser, stories)
+        print(f"  hket: {len(stories)} dated tech stories", flush=True)
+        if stories:
+            await _open_articles(browser, stories)
         await browser.close()
 
-    for source, stories in collected.items():
-        filtered = _summarize(source, stories) if stories else []
-        for story in filtered:
-            story["source"] = source
-        replace_day(today.isoformat(), filtered, source=source)
-        print(f"Stored {len(filtered)} {source} stories for {today.isoformat()}", flush=True)
-    write_report(today.isoformat())
+    filtered = _summarize("hket", stories) if stories else []
+    for story in filtered:
+        story["source"] = "hket"
+        posted = story.get("posted")
+        story["date"] = (
+            publication_day("hket", posted)
+            if isinstance(posted, datetime)
+            else today.isoformat()
+        )
+    if filtered:
+        dates = save_on_publication_dates("hket", filtered)
+    else:
+        replace_day(today.isoformat(), [], source="hket")
+        dates = [today.isoformat()]
+    print(f"Stored {len(filtered)} hket stories on {', '.join(dates)}", flush=True)
+    for day in dates:
+        write_report(day)
 
 
 def _summarize(source: str, stories: list[dict]) -> list[dict]:
@@ -364,19 +254,104 @@ def _summarize(source: str, stories: list[dict]) -> list[dict]:
     return kept
 
 
+def _match_keys(story: dict) -> list[str]:
+    keys: list[str] = []
+    for key in (story.get("external_url") or "", story.get("hn_url") or ""):
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+async def _listing_index() -> dict[tuple[str, str], str]:
+    """Map (source, url) to the publication day shown on the current listing."""
+    reference = reference_for(utcnow().date())
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=["--disable-dev-shm-usage"],
+        )
+        context = await browser.new_context(user_agent=USER_AGENT, locale="zh-HK")
+        await context.route("**/*", _route)
+        page = await context.new_page()
+        try:
+            hket = await _collect_hket(page, reference)
+        finally:
+            await context.close()
+            await browser.close()
+    index: dict[tuple[str, str], str] = {}
+    for story in hket:
+        posted = story.get("posted")
+        if not isinstance(posted, datetime):
+            continue
+        day = publication_day("hket", posted)
+        for key in _match_keys(story):
+            index[("hket", key)] = day
+    return index
+
+
+def refile_stored() -> None:
+    """Move saved HKET rows onto the Hong Kong date printed on the tech listing."""
+    init_db()
+    if not acquire_run_lock():
+        print("A scrape is already running.", flush=True)
+        return
+    try:
+        meta_set("scrape_message", "Filing stories by publication date")
+        index = asyncio.run(_listing_index())
+        conn = connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, source, date, external_url, hn_url
+                FROM stories
+                WHERE source = 'hket'
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+        updates: list[tuple[int, str]] = []
+        unmatched = 0
+        for row in rows:
+            day = ""
+            for key in (row["external_url"], row["hn_url"]):
+                if key and (found := index.get((row["source"], key))):
+                    day = found
+                    break
+            if not day:
+                unmatched += 1
+                continue
+            if day != row["date"]:
+                updates.append((row["id"], day))
+        dates = move_story_dates(updates)
+        for day in dates:
+            write_report(day)
+        print(
+            f"Moved {len(updates)} stories onto their publication dates. "
+            f"{unmatched} stayed put.",
+            flush=True,
+        )
+        meta_set("scrape_message", "Up to date")
+    except Exception as exc:
+        meta_set("scrape_message", f"Scrape failed: {exc}")
+        print(f"Refile failed: {exc}", flush=True)
+        raise
+    finally:
+        release_run_lock()
+
+
 def scrape_today() -> None:
     init_db()
     if not acquire_run_lock():
         print("A scrape is already running.", flush=True)
         return
     try:
-        meta_set("scrape_message", "Scraping HKET, Lobsters, and Slashdot")
-        print("Scraping HKET, Lobsters, and Slashdot", flush=True)
-        asyncio.run(_scrape_both())
+        meta_set("scrape_message", "Scraping HKET tech")
+        print("Scraping HKET tech", flush=True)
+        asyncio.run(_scrape_hket())
         meta_set("scrape_message", "Up to date")
     except Exception as exc:
         meta_set("scrape_message", f"Scrape failed: {exc}")
-        print(f"HKET/Lobsters/Slashdot scrape failed: {exc}", flush=True)
+        print(f"HKET scrape failed: {exc}", flush=True)
     finally:
         release_run_lock()
 

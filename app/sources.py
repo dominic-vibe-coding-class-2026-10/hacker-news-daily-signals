@@ -1,4 +1,4 @@
-"""The four front pages this tracker reads. HKET is first."""
+"""The two front pages this tracker reads. HKET is first."""
 
 from __future__ import annotations
 
@@ -14,18 +14,6 @@ SOURCES = (
         "label_en": "Hacker News",
         "label_zh": "Hacker News",
         "url": "https://news.ycombinator.com/",
-    },
-    {
-        "id": "lobsters",
-        "label_en": "Lobsters",
-        "label_zh": "Lobsters",
-        "url": "https://lobste.rs/",
-    },
-    {
-        "id": "slashdot",
-        "label_en": "Slashdot",
-        "label_zh": "Slashdot",
-        "url": "https://slashdot.org/",
     },
 )
 
