@@ -1,6 +1,11 @@
 from datetime import date, datetime, timezone
 
-from app.other_sources import parse_hket_parts, parse_hket_time, parse_slashdot_time
+from app.other_sources import (
+    keep_hket_page,
+    parse_hket_parts,
+    parse_hket_time,
+    parse_slashdot_time,
+)
 
 from app import db
 from app.filter import parse_model_array
@@ -39,6 +44,34 @@ def test_hket_time_is_hong_kong():
     assert parse_hket_parts(["14:35", "2026/11/13"], now) == datetime(
         2026, 11, 13, 6, 35, tzinfo=timezone.utc
     )
+
+
+def test_hket_page_keeps_dated_cards_older_than_a_day():
+    reference = datetime(2026, 11, 15, 12, 42, tzinfo=timezone.utc)
+    stories = [
+        {
+            "title": "Today",
+            "external_url": "https://inews.hket.com/article/1",
+            "posted": datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc),
+        },
+        {
+            "title": "Three days ago",
+            "external_url": "https://inews.hket.com/article/2",
+            "posted": datetime(2026, 11, 12, 8, 0, tzinfo=timezone.utc),
+        },
+        {
+            "title": "No time",
+            "external_url": "https://inews.hket.com/article/3",
+        },
+        {
+            "title": "Today",
+            "external_url": "https://inews.hket.com/article/1",
+            "posted": datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc),
+        },
+    ]
+    kept = keep_hket_page(stories, reference, limit=30)
+    assert [story["title"] for story in kept] == ["Today", "Three days ago"]
+    assert kept[1]["age_text"].endswith("ago")
 
 
 def test_slashdot_time_is_us_eastern():

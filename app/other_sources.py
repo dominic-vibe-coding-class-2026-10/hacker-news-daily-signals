@@ -264,19 +264,44 @@ def _from_slashdot(row: dict) -> dict | None:
     }
 
 
+def keep_hket_page(
+    stories: list[dict], reference: datetime, limit: int = HKET_MAX_STORIES
+) -> list[dict]:
+    """Newest dated tech-section cards. The 24-hour window does not apply."""
+    dated = [story for story in stories if isinstance(story.get("posted"), datetime)]
+    dated.sort(key=lambda story: story["posted"], reverse=True)
+    chosen: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for story in dated:
+        key = (" ".join(story["title"].split()).casefold(), story.get("external_url") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        story["age_text"] = age_text_as_of(story["posted"], reference)
+        chosen.append(story)
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
 async def _collect_hket(page: Page, reference: datetime) -> list[dict]:
     rows: list[dict] = []
     for page_no in range(1, HKET_MAX_PAGES + 1):
         url = HKET_LIST if page_no == 1 else f"{HKET_LIST}?p={page_no}"
         batch = await _collect(page, url, HKET_JS)
+        if not batch and page_no > 1:
+            break
         rows.extend(batch)
-        stories = [story for row in rows if (story := _from_hket(row))]
-        recent = _recent(stories, reference)
-        oldest_outside = len(stories) > len(recent)
-        if oldest_outside or len(recent) >= HKET_MAX_STORIES or not batch:
-            return recent[:HKET_MAX_STORIES]
-    stories = [story for row in rows if (story := _from_hket(row))]
-    return _recent(stories, reference)[:HKET_MAX_STORIES]
+        stories = keep_hket_page(
+            [story for row in rows if (story := _from_hket(row))],
+            reference,
+        )
+        if len(stories) >= HKET_MAX_STORIES or not batch:
+            return stories
+    return keep_hket_page(
+        [story for row in rows if (story := _from_hket(row))],
+        reference,
+    )
 
 
 async def _scrape_both() -> None:
@@ -309,18 +334,34 @@ async def _scrape_both() -> None:
             reference,
         )
         for source, stories in collected.items():
-            print(f"  {source}: {len(stories)} within 24 hours", flush=True)
+            label = "dated tech stories" if source == "hket" else "within 24 hours"
+            print(f"  {source}: {len(stories)} {label}", flush=True)
             if stories:
                 await _open_articles(browser, stories)
         await browser.close()
 
     for source, stories in collected.items():
-        filtered = filter_stories(stories) if stories else []
+        filtered = _summarize(source, stories) if stories else []
         for story in filtered:
             story["source"] = source
         replace_day(today.isoformat(), filtered, source=source)
         print(f"Stored {len(filtered)} {source} stories for {today.isoformat()}", flush=True)
     write_report(today.isoformat())
+
+
+def _summarize(source: str, stories: list[dict]) -> list[dict]:
+    if source != "hket":
+        return filter_stories(stories)
+    # The model prompt drops anything whose age_text is older than 24 hours.
+    # These cards are the tech listing, so the request uses a recent age and
+    # the stored age stays the real one.
+    real_age = {story.get("external_url") or "": story.get("age_text") or "" for story in stories}
+    for story in stories:
+        story["age_text"] = "1 hour ago"
+    kept = filter_stories(stories)
+    for story in kept:
+        story["age_text"] = real_age.get(story.get("external_url") or "", story.get("age_text") or "")
+    return kept
 
 
 def scrape_today() -> None:

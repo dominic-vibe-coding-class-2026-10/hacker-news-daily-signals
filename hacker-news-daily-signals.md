@@ -11,7 +11,7 @@ Build a daily service that:
    - Hacker News: `https://news.ycombinator.com/`
    - Lobsters: `https://lobste.rs/`
    - Slashdot: `https://slashdot.org/`
-2. Keeps only stories posted in the last 24 hours.
+2. Keeps Hacker News, Lobsters, and Slashdot stories posted in the last 24 hours. HKET keeps the newest 30 dated cards on the tech section, including ones older than 24 hours.
 3. Opens each kept story and stores the first 2000 characters of clean article text.
 4. Uses Ollama Cloud to write a short summary in English and Traditional Chinese.
 5. Stores every result in local SQLite.
@@ -71,10 +71,11 @@ Firecrawl and Tavily are optional fallbacks only. Do not use them for the main f
 - Open the tech section `https://inews.hket.com/sran010/科技`, then `?p=2`, `?p=3`, and `?p=4` at most. Do not read the all-news listing.
 - From each `div.listing-title a` read the title attribute, else the text. Skip links that are not `/article/` URLs, and skip a card that appears again on the same page.
 - Read every `.listing-date span` in that card’s listing widget. A card dated `HH:MM` plus `YYYY/MM/DD` uses that calendar date. A card labeled `今日` plus `HH:MM` uses the current Hong Kong date. Cards with no time are featured items and are skipped.
-- Treat that clock time as `Asia/Hong_Kong`, then convert to UTC. Keep the story only when it falls inside the same 24-hour window.
-- Keep the article href with the query string removed. Ignore links that are not `/article/` URLs.
+- Treat that clock time as `Asia/Hong_Kong`, then convert to UTC. Do not drop a dated tech card because it is older than 24 hours. Hacker News, Lobsters, and Slashdot still use that window.
+- Keep the article href with the query string removed. Ignore links that are not `/article/` URLs. The same article can appear as the hero and again in the list; store it once.
 - HKET does not show points or comment counts. Store both as `0`. Do not invent them.
-- Stop paging once a page contains a story outside the window, the page is empty, or 30 in-window stories are already kept. Never store more than those 30 newest stories.
+- Page through `?p=2` and later only until 30 unique dated cards are kept, a page is empty, or four pages have been read. Sort by posted time, newest first. Never store more than those 30.
+- The model prompt still excludes an age older than 24 hours. Send HKET cards to the model with `age_text` of `1 hour ago`, then store the real age text. Do not change the system prompt.
 - Open each kept article and extract text. Store under source id `hket` and today’s UTC date.
 - Days before the first HKET scrape stay empty for that source.
 
