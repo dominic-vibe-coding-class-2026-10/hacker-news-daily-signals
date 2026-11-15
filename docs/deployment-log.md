@@ -22,7 +22,7 @@ Commits on `main` as of this deployment note:
 | [`3637e50`](https://github.com/dominic-vibe-coding-class-2026-10/hacker-news-daily-signals/commit/3637e50) | 2026-11-15 20:44 | Dominic Yu | Add the daily signals tracker, with HKET limited to the tech section. |
 | [`03754fe`](https://github.com/dominic-vibe-coding-class-2026-10/hacker-news-daily-signals/commit/03754fe) | 2026-11-15 20:58 | Dominic Yu | Keep the newest HKET tech cards even when they are older than a day. |
 | [`8246409`](https://github.com/dominic-vibe-coding-class-2026-10/hacker-news-daily-signals/commit/8246409) | 2026-11-15 21:10 | Dominic Yu | Drop Lobsters and Slashdot, and file HKET cards on their printed date. |
-| [`0be0d10`](https://github.com/dominic-vibe-coding-class-2026-10/hacker-news-daily-signals/commit/0be0d109d22e0bddd48fdaf48d19d7e7aabd7aef) | 2026-11-15 | Dominic Yu | Show author details on the dashboard and record deployment outcomes. |
+| [`281e4aa`](https://github.com/dominic-vibe-coding-class-2026-10/hacker-news-daily-signals/commit/281e4aaef08105c27b98c86d8f880b1429ea7b98) | 2026-11-15 | Dominic Yu | Show author details on the dashboard and record deployment outcomes. |
 
 Remote: `git@github.com:dominic-vibe-coding-class-2026-10/hacker-news-daily-signals.git`
 
