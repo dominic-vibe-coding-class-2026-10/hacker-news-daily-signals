@@ -384,7 +384,7 @@
         link.href = story.external_url || story.hn_url;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
-        link.textContent = story.title;
+        link.textContent = story.headline || story.title;
         heading.appendChild(link);
         const summary = document.createElement("p");
         summary.textContent = state.lang === "zh" ? story.summary_zh : story.summary_en;
@@ -405,6 +405,7 @@
       const query = new URLSearchParams({
         date: state.selected,
         sources: state.sources.join(","),
+        lang: state.lang,
       });
       const response = await fetch("/api/stories?" + query.toString());
       if (!response.ok) return;
@@ -423,7 +424,7 @@
       if (!state.selected && state.days.length) state.selected = state.days[0].date;
       const signature = state.days
         .map((day) => day.date + ":" + day.story_count + ":" + day.scraped_at)
-        .join("|");
+        .join("|") + "|" + String(body.english_titles ?? 0);
       const changed = signature !== state.signature || previous !== state.selected;
       state.signature = signature;
       fillDates();
