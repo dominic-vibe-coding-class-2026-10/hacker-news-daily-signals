@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.db import (
     DATA_DIR,
+    count_english_headlines,
     day_row,
     has_completed_preload,
     init_db,
@@ -23,6 +24,7 @@ from app.db import (
     stories_for,
 )
 from app.sources import SOURCES, SOURCE_IDS
+from app.titles import localized_headline
 
 ROOT = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
@@ -52,6 +54,14 @@ def _boot_scrape() -> None:
     """Preload the last week only when this database has never finished one."""
     try:
         init_db()
+        try:
+            from app.titles import backfill_english_titles
+
+            updated = backfill_english_titles()
+            if updated:
+                print(f"Stored {updated} English headlines", flush=True)
+        except Exception as exc:
+            print(f"English headline backfill failed: {exc}", flush=True)
         if has_completed_preload():
             return
         from app.scraper import run_plan
@@ -84,6 +94,7 @@ def status():
         "running": scrape_running(),
         "message": meta_get("scrape_message"),
         "preload_complete": has_completed_preload(),
+        "english_titles": count_english_headlines(),
         "days": list_days(),
     }
 
@@ -94,14 +105,17 @@ def sources():
 
 
 @app.get("/api/stories")
-def stories(date: str, sources: str = ""):
+def stories(date: str, sources: str = "", lang: str = "en"):
     if not DATE_RE.fullmatch(date):
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
     if not sources.strip():
         chosen = list(SOURCE_IDS)
     else:
         chosen = [item for item in sources.split(",") if item in SOURCE_IDS]
-    return {"day": day_row(date), "stories": stories_for(date, chosen)}
+    rows = stories_for(date, chosen)
+    for row in rows:
+        row["headline"] = localized_headline(row, lang)
+    return {"day": day_row(date), "stories": rows}
 
 
 @app.get("/reports/{day}")
