@@ -1,6 +1,8 @@
 # Hacker News Daily Signals
 
-A local daily tracker for [Hacker News](https://news.ycombinator.com/). Playwright opens the front page, clicks **More** at most three times, and opens each story title. Ollama Cloud keeps stories from the last 24 hours and writes a short summary in English and Traditional Chinese. Results are stored in SQLite and shown on a small dashboard.
+A local daily tracker for the [HKET tech section](https://inews.hket.com/sran010/科技) and [Hacker News](https://news.ycombinator.com/). Playwright opens each front page. Hacker News keeps stories from the last 24 hours and clicks **More** at most three times. HKET keeps the newest dated cards on the tech section. Ollama Cloud writes a short summary in English and Traditional Chinese. Results are stored in SQLite and shown on a small dashboard.
+
+When the dashboard language is English, every headline is English, including an HKET story whose scraped title is Chinese. Traditional Chinese keeps the scraped title. Summaries follow the same switch. Headline translation uses the public Google Translate endpoint, then MyMemory if that fails. It does not use Ollama and needs no extra API key. The header shows Dominic Yu, [dominic@data-science-hk.org](mailto:dominic@data-science-hk.org).
 
 The first run preloads the last 7 calendar days from Hacker News archive front pages (`/front?day=YYYY-MM-DD`). Later runs refresh today only. HKET tech is collected on that same run and stored on the Hong Kong date printed on each card, so a story dated the 14th shows when that date is selected.
 
@@ -38,7 +40,7 @@ From the project directory, with the virtual environment activated:
 python -m app.scraper
 ```
 
-On a new database this loads the last 7 days. After that it scrapes the current front page and keeps stories posted in the last 24 hours. Each day is also written to `data/reports/YYYY-MM-DD.md`.
+On a new database this loads the last 7 days of Hacker News. After that it refreshes today’s Hacker News front page and keeps stories posted in the last 24 hours. The same command collects HKET tech and stores each card on the Hong Kong date printed on it, including cards older than 24 hours. Each day is also written to `data/reports/YYYY-MM-DD.md`.
 
 ## Run the dashboard
 
@@ -46,7 +48,7 @@ On a new database this loads the last 7 days. After that it scrapes the current 
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000. The page has an English / 繁體中文 switch and a date menu of every day in the database. Starting the dashboard on an empty database also runs the first-week preload.
+Open http://127.0.0.1:8000. The page has an English / 繁體中文 switch, a date menu of every day in the database, and the author line Dominic Yu, dominic@data-science-hk.org. English shows an English headline for every story. 繁體中文 shows the scraped title. Starting the dashboard on an empty database also runs the first-week preload, and startup fills any missing English headlines.
 
 ## Schedule it daily
 
@@ -66,7 +68,7 @@ schtasks /create /tn "HN Daily Signals" /sc daily /st 07:00 /tr "C:\absolute\pat
 
 Set the task's "Start in" directory to the project folder so `.env` and `data/` resolve correctly.
 
-The first run preloads one week of archive. Scheduled runs after that refresh the current day.
+The first run preloads one week of Hacker News. Scheduled runs after that refresh the current Hacker News day and collect HKET tech again.
 
 ## Deployment
 

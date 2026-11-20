@@ -12,8 +12,9 @@ Build a daily service that:
 2. Keeps Hacker News stories posted in the last 24 hours. HKET keeps the newest 30 dated cards on the tech section, including ones older than 24 hours. Each HKET card is stored on the Hong Kong date printed on that card, not on the day the scraper happened to run.
 3. Opens each kept story and stores the first 2000 characters of clean article text.
 4. Uses Ollama Cloud to write a short summary in English and Traditional Chinese.
-5. Stores every result in local SQLite.
-6. Serves a dashboard where the reader chooses which of the two sources to show. HKET is the first checkbox.
+5. Stores every result in local SQLite. Each story keeps its scraped `title` and a separate English `title_en`.
+6. Serves a dashboard where the reader chooses which of the two sources to show. HKET is the first checkbox. The header shows Dominic Yu and dominic@data-science-hk.org.
+7. When the reader selects English, every card headline is English, including an HKET story whose scraped title is Chinese, once `title_en` is stored. If that headline is still empty, English mode shows the scraped title. Traditional Chinese keeps the scraped title. Summaries follow the same switch. Do not use Ollama for headlines.
 
 ## Source filter (required UI)
 
@@ -30,9 +31,9 @@ Behavior:
 - Applying zero sources shows: “Select at least one source, then press Apply.” and does not list stories.
 - The applied selection is saved in `localStorage` under `hn-sources` and restored on reload.
 - A saved selection that is exactly `hn,lobsters,slashdot` becomes `hket,hn`. Any other saved id for Lobsters or Slashdot is dropped. If nothing known remains, both sources are selected.
-- `GET /api/stories?date=YYYY-MM-DD&sources=hket,hn` returns only those sources. Unknown ids, including `lobsters` and `slashdot`, are ignored. An empty `sources` value means both.
-- Each story card shows the source name, points, and comment count.
-- The language switch still changes every UI label, including Sources, Apply, and the empty-state sentence. Story summaries follow the active language.
+- `GET /api/stories?date=YYYY-MM-DD&sources=hket,hn&lang=en` returns only those sources. Unknown ids, including `lobsters` and `slashdot`, are ignored. An empty `sources` value means both.
+- Each story card shows the source name, points, and comment count. The card title is the localized headline.
+- The language switch still changes every UI label, including Sources, Apply, and the empty-state sentence. Headlines and summaries both follow the active language. English requests `lang=en` and renders `headline`. Traditional Chinese requests `lang=zh` and shows the scraped title.
 
 Empty selection copy:
 
@@ -45,8 +46,9 @@ Empty selection copy:
 - **Ollama Cloud** at `https://ollama.com/api/chat`: recency filter plus bilingual summaries. Model comes from `OLLAMA_MODEL`.
 - **SQLite** file `data/hn.db`.
 - **FastAPI** plus `templates/dashboard.html`. No frontend build step.
+- **English headlines**: the public Google Translate endpoint, then MyMemory. Not Ollama. No extra API key.
 
-Firecrawl and Tavily are optional fallbacks only. Do not use them for the main flow. `HF_TOKEN` is unused.
+Firecrawl and Tavily are optional fallbacks only. Do not use them for the main flow. They are not a path for HKET or for headlines. `HF_TOKEN` is unused.
 
 ## Deterministic collection
 
@@ -104,6 +106,40 @@ Request body:
 
 Auth accepts `OLLAMA_CLOUD_API_KEY` or, if that is empty, `OLLAMA_API_KEY`.
 
+Ollama writes summaries only. It does not translate headlines.
+
+## English headlines
+
+A scraped title that contains a CJK ideograph is also stored as an English headline. English mode shows that headline. Traditional Chinese mode keeps the scraped title. Do not replace `title`. Do not send titles to Ollama. Do not add a translation API key.
+
+`app/titles.py` owns this. Stories keep `title` and `title_en`. `localized_headline()` picks the card text:
+
+- When `lang` starts with `zh`, return the scraped `title`.
+- Otherwise return `title_en` when that value is non-empty and contains no CJK.
+- Otherwise return the scraped `title` when that title contains no CJK.
+- Otherwise return the scraped `title`.
+
+An already-English title passes through unchanged. It is not sent to a translator, and `title_en` may stay empty. `GET /api/stories` still returns it as `headline` in both languages.
+
+Translation:
+
+- `GET https://translate.googleapis.com/translate_a/single` with `User-Agent: Mozilla/5.0`. Try `client=dict-chrome-ex`, then `client=gtx`. Other params: `sl=auto`, `tl=en`, `dt=t`, `q` the title.
+- Read a JSON array. Join the first string of each chunk in the first element. Skip a chunk that does not start with a string. An empty join is a failure.
+- On HTTP 429 or 5xx, or when the body is not a usable translation, try the other client. If both clients fail, the Google step has failed.
+- For one title, a failed Google step falls back to `GET https://api.mymemory.translated.net/get` with `q` limited to 500 characters and `langpair=zh-TW|en`. HTML-unescape the text. Reject an empty string, a body that contains `MYMEMORY WARNING`, or a `responseStatus` other than 200.
+
+Tidy the translated headline: Unicode NFKC, HTML-unescape, collapse whitespace, and turn a bar (`|`, including a fullwidth bar) into ` | `. Reject a result that is empty, still contains CJK, or matches the source title ignoring case.
+
+Translate unique Chinese titles in batches of 20, joined by newlines. If the request fails or the returned line count does not match, split the batch in half and retry. A single title uses the one-title path, including the MyMemory fallback. Do not send a whole batch to MyMemory. Reuse one English string for every row with the same title.
+
+`backfill_english_titles()` fills missing `title_en` and changes no other column. Match the update by story id and the current title. Skip a row whose `title_en` is already non-empty and free of CJK. A title with no CJK is skipped. A second run that finds nothing to fill updates zero rows. A failed translation leaves `title_en` empty and keeps the row, including its summaries, points, and URLs.
+
+Call `backfill_english_titles()` when the server starts, after the schema migration and before the preload decision. Log a backfill error and continue. After a source’s rows for a day are replaced, and after stories are saved onto their publication dates, fill any missing English headlines again. A failure there leaves the rows that were just saved. `python -m app.titles` runs the same backfill and does not scrape.
+
+`GET /api/status` includes `english_titles`: how many rows can show an English headline (a non-empty `title_en` with no CJK, or a scraped title with no CJK). The dashboard poll signature includes that count, so the story list reloads when a backfill finishes.
+
+The Markdown report heading stays the scraped `title`.
+
 ## Environment
 
 `.env.example` must exist. `.env` is gitignored.
@@ -134,6 +170,7 @@ CREATE TABLE stories (
     summary_en TEXT NOT NULL DEFAULT '',
     summary_zh TEXT NOT NULL DEFAULT '',
     raw_content TEXT NOT NULL DEFAULT '',
+    title_en TEXT NOT NULL DEFAULT '',   -- English headline; scraped title stays in title
     UNIQUE(date, source, title, external_url)
 );
 
@@ -152,28 +189,31 @@ CREATE TABLE meta (
 
 Migrate an older table that lacks `source` by adding the column (default `hn`) and rebuilding the unique key so the same URL can exist once per source per day.
 
+Migrate an older table that lacks `title_en` with `ALTER TABLE stories ADD COLUMN title_en TEXT NOT NULL DEFAULT ''`. Leave every existing title, summary, point, and URL as it is. New databases create the column with that default.
+
 `meta.preload_complete = 1` after the first successful 7-day Hacker News preload. `meta.scrape_pid` is the running scraper pid; a dead pid may be replaced.
 
 ## HTTP API
 
 - `GET /` dashboard HTML.
-- `GET /api/status` → `{running, message, preload_complete, days: [{date, note, story_count, scraped_at}]}`.
+- `GET /api/status` → `{running, message, preload_complete, english_titles, days: [{date, note, story_count, scraped_at}]}`.
 - `GET /api/sources` → the two sources with `id`, `label_en`, `label_zh`, and `url`, HKET first.
-- `GET /api/stories?date=YYYY-MM-DD&sources=hket,hn`.
-- `GET /reports/YYYY-MM-DD` returns that day’s Markdown file.
+- `GET /api/stories?date=YYYY-MM-DD&sources=hket,hn&lang=en`. `lang` defaults to `en`. Each story includes the scraped `title`, `title_en`, and `headline` from `localized_headline()`. Unknown ids, including `lobsters` and `slashdot`, are ignored. An empty `sources` value means both.
+- `GET /reports/YYYY-MM-DD` returns that day’s Markdown file. The report heading is the scraped title.
 
-On an empty database, starting the server starts the Hacker News 7-day preload in a background thread. After `preload_complete`, opening the dashboard does not scrape again.
+On an empty database, starting the server fills missing English headlines, then starts the Hacker News 7-day preload in a background thread. After `preload_complete`, opening the dashboard does not scrape again. It still fills any missing `title_en`.
 
 ## Dashboard
 
 One page, no framework. Paper background, serif headlines, sans-serif controls.
 
-- Title switches between “Hacker News Daily Signals” and “Hacker News 每日訊號”.
-- Language control: English / 繁體中文. Persist `hn-lang`.
+- The document title and the visible heading switch between “Hacker News Daily Signals · Dominic Yu” and “Hacker News 每日訊號 · Dominic Yu”.
+- Under the lede, the byline is “Dominic Yu · dominic@data-science-hk.org”. The email is a `mailto:` link. The byline stays in English in both languages.
+- Language control: English / 繁體中文. Persist `hn-lang`. Switching language reloads `/api/stories` with `lang=en` or `lang=zh`. The card link text is `headline`, or `title` when `headline` is missing. The summary is `summary_en` or `summary_zh` for the same language.
 - Date menu lists every `days.date`, newest first. Changing the date reloads stories published on that date for the already applied sources. HKET cards do not all appear under the scrape day.
 - Source checkboxes and Apply sit under the header.
 - While a scrape runs, show its status message. Translate `Scraping YYYY-MM-DD (i/n)` to `正在抓取 YYYY-MM-DD（i/n）` in Chinese mode.
-- Poll `/api/status` every 3 seconds. Reload the story list only when the selected date or the stored day signatures change.
+- Poll `/api/status` every 3 seconds. Reload the story list only when the selected date, the stored day signatures, or `english_titles` change.
 - Story link opens `external_url`, or the discussion URL when the external URL is empty, in a new tab.
 - Within a day, cards are grouped by source in checkbox order (HKET, then Hacker News). Inside a source they are ordered by points, then comments, then title.
 
@@ -203,7 +243,7 @@ Write `data/reports/YYYY-MM-DD.md` from every source stored for that day.
 - Summary (ZH): ...
 ```
 
-Omit a source section when that source has no rows. Rewriting the file must include every source still in the database, not only the source just scraped.
+Omit a source section when that source has no rows. Rewriting the file must include every source still in the database, not only the source just scraped. The heading in each story is the scraped `title`, not `title_en`.
 
 ## Project layout
 
@@ -219,6 +259,7 @@ hacker-news-daily-signals/
 │   ├── scraper.py          # Hacker News Playwright flow and daily plan
 │   ├── other_sources.py    # HKET Playwright flow
 │   ├── filter.py           # Ollama Cloud filter and bilingual summaries
+│   ├── titles.py           # English headlines; Google Translate, then MyMemory
 │   ├── db.py               # SQLite
 │   ├── sources.py          # the two source ids and labels, HKET first
 │   ├── report.py           # Markdown writer
@@ -242,6 +283,7 @@ pip install -r requirements.txt
 playwright install chromium
 python -m app.scraper              # Hacker News: 7 days on first run, else today; then HKET tech
 python -m app.other_sources        # HKET tech only
+python -m app.titles               # fill missing English headlines; does not scrape
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -263,7 +305,7 @@ Set the task’s start directory to the project folder.
 
 ## README
 
-The README must explain install on Linux, macOS, and Windows, how to fill in `.env`, how to run the scraper once, how to run the dashboard, both schedule snippets above, and that the first run preloads one week of Hacker News while HKET tech is collected on that same run and stored on each card’s Hong Kong publication date.
+The README must explain install on Linux, macOS, and Windows, how to fill in `.env`, how to run the scraper once, how to run the dashboard, both schedule snippets above, and that the first run preloads one week of Hacker News while HKET tech is collected on that same run and stored on each card’s Hong Kong publication date. It names both sources. It says English mode shows an English headline for every story, including a Chinese scraped title, translated without Ollama and without an extra key, and that Traditional Chinese keeps the scraped title. It names the author Dominic Yu, dominic@data-science-hk.org.
 
 ## Acceptance checks
 
@@ -271,7 +313,11 @@ The README must explain install on Linux, macOS, and Windows, how to fill in `.e
 2. Checking only one box does nothing until Apply. After Apply, cards from the other sources disappear.
 3. Checking both boxes and pressing Apply brings the hidden source back.
 4. Applying with every box cleared shows the “select at least one source” message.
-5. English / 繁體中文 changes the chrome and which summary is rendered. The HKET checkbox stays labeled “HKET”.
+5. English / 繁體中文 changes the chrome, the headline, and which summary is rendered. The HKET checkbox stays labeled “HKET”.
 6. The date menu still switches days. An HKET card printed as `2026/11/14` appears on 2026-11-14. It does not appear only on the scrape day.
 7. Refreshing Hacker News does not delete HKET rows for that date. Saving HKET onto its publication dates removes that source’s copy of the same URL from the scrape day and leaves Hacker News rows in place.
 8. Summaries exist in both languages. Points and URLs match the scraped page. HKET points and comments stay 0.
+9. With English selected, a story with an English `title_en`, or a scraped title that is already English, shows an English headline. An HKET story whose scraped title is Chinese shows `title_en` as `headline` and still returns the original `title`. Traditional Chinese shows that scraped title. An already-English title is shown as scraped and is not sent to the translator. If `title_en` is still empty, English mode shows the scraped title.
+10. Server start, `python -m app.titles`, and saving stories all fill a missing `title_en` and do not change the title, summaries, points, or URLs. A failed translation keeps the row and leaves `title_en` empty. A second backfill that finds nothing to fill updates zero rows.
+11. An older database without `title_en` gains `title_en TEXT NOT NULL DEFAULT ''` and keeps its rows.
+12. The document title and the visible heading are “Hacker News Daily Signals · Dominic Yu” in English and “Hacker News 每日訊號 · Dominic Yu” in Traditional Chinese. The header shows Dominic Yu and a mailto link to dominic@data-science-hk.org.
